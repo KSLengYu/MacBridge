@@ -1,0 +1,130 @@
+<Window x:Class="MacBridgeUI.SpeedTestWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="MacBridge Speed Test"
+        ShowInTaskbar="False"
+        Width="540" Height="400"
+        ResizeMode="NoResize"
+        WindowStartupLocation="CenterOwner"
+        SnapsToDevicePixels="True"
+        UseLayoutRounding="True"
+        Background="#0B0E14"
+        Foreground="#F3F4F6"
+        FontFamily="Segoe UI Variable Text, Segoe UI, Microsoft YaHei UI">
+
+    <shell:WindowChrome.WindowChrome>
+        <shell:WindowChrome CaptionHeight="42"
+                            ResizeBorderThickness="0"
+                            GlassFrameThickness="0"
+                            CornerRadius="12"
+                            UseAeroCaptionButtons="False"/>
+    </shell:WindowChrome.WindowChrome>
+
+    <Border BorderBrush="#263248" BorderThickness="1" Background="#0B0E14" CornerRadius="10">
+        <Grid Margin="20,0,20,18">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="42"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <Grid Grid.Row="0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock x:Name="TxtTitle" Text="双 C 线实时测速" FontSize="13.5" FontWeight="SemiBold" Foreground="#F8FAFC"/>
+                    <Border Background="#131B29" BorderBrush="#233044" BorderThickness="1" CornerRadius="4" Padding="7,2" Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="TxtLinkBadge" Text="USB 2.0 · 480 Mbps" FontSize="10.5" FontWeight="SemiBold" Foreground="#7DD3FC"/>
+                    </Border>
+                </StackPanel>
+                <Button x:Name="BtnCloseX" Style="{StaticResource ChromeBtn}" Click="BtnClose_Click" HorizontalAlignment="Right" shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Path Data="M0,0 L9,9 M9,0 L0,9" Stroke="#94A3B8" StrokeThickness="1.3" Width="9" Height="9"/>
+                </Button>
+            </Grid>
+
+            <!-- Subtitle -->
+            <TextBlock x:Name="TxtSub" Grid.Row="1" Text="纯内存直连压测（绕过磁盘读写与 SMB 开销）" FontSize="11.5" Foreground="#64748B" Margin="0,0,0,12"/>
+
+            <!-- Live Gauge Card -->
+            <Border Grid.Row="2" Background="#121722" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="10" Padding="18,16" Margin="0,0,0,12">
+                <StackPanel>
+                    <Grid>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="TxtBigMbps" Text="0.0" FontSize="36" FontWeight="Bold" Foreground="#F8FAFC" FontFamily="Consolas" VerticalAlignment="Bottom"/>
+                            <TextBlock Text=" Mbps" FontSize="14" FontWeight="SemiBold" Foreground="#60A5FA" Margin="4,0,0,7" VerticalAlignment="Bottom"/>
+                            <TextBlock x:Name="TxtBigMBps" Text="(0.0 MB/s)" FontSize="12.5" Foreground="#94A3B8" Margin="10,0,0,7" FontFamily="Consolas" VerticalAlignment="Bottom"/>
+                        </StackPanel>
+                        <TextBlock x:Name="TxtPhaseBadge" Text="" FontSize="11.5" FontWeight="SemiBold" Foreground="#93C5FD" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                    </Grid>
+
+                    <TextBlock x:Name="TxtPhase" Text="准备就绪..." FontSize="12" Foreground="#94A3B8" Margin="0,10,0,0" TextTrimming="CharacterEllipsis"/>
+                </StackPanel>
+            </Border>
+
+            <!-- 3 Summary Tiles (Down & Up have independent progress bars) -->
+            <Grid Grid.Row="3" Margin="0,0,0,14">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="10"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="10"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Border x:Name="CardDown" Grid.Column="0" Background="#121722" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="10" Padding="13,12">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0">
+                            <TextBlock x:Name="LblDown" Text="下行 (Mac -> Win)" FontSize="11" FontWeight="SemiBold" Foreground="#64748B"/>
+                            <TextBlock x:Name="TxtDownPct" Text="0%" FontSize="10.5" FontWeight="SemiBold" Foreground="#10B981" HorizontalAlignment="Right" FontFamily="Consolas"/>
+                        </Grid>
+                        <TextBlock x:Name="TxtDownAvg" Grid.Row="1" Text="-- Mbps" FontSize="15" FontWeight="SemiBold" Foreground="#10B981" Margin="0,6,0,2" FontFamily="Consolas"/>
+                        <TextBlock x:Name="TxtDownPeak" Grid.Row="2" Text="--" FontSize="11" Foreground="#94A3B8" FontFamily="Consolas"/>
+                        <ProgressBar x:Name="ProgDown" Grid.Row="4" Minimum="0" Maximum="100" Value="0" Height="5" Margin="0,10,0,0" Foreground="#10B981" Style="{StaticResource DarkProgressBar}"/>
+                    </Grid>
+                </Border>
+
+                <Border x:Name="CardUp" Grid.Column="2" Background="#121722" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="10" Padding="13,12">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0">
+                            <TextBlock x:Name="LblUp" Text="上行 (Win -> Mac)" FontSize="11" FontWeight="SemiBold" Foreground="#64748B"/>
+                            <TextBlock x:Name="TxtUpPct" Text="0%" FontSize="10.5" FontWeight="SemiBold" Foreground="#3B82F6" HorizontalAlignment="Right" FontFamily="Consolas"/>
+                        </Grid>
+                        <TextBlock x:Name="TxtUpAvg" Grid.Row="1" Text="-- Mbps" FontSize="15" FontWeight="SemiBold" Foreground="#3B82F6" Margin="0,6,0,2" FontFamily="Consolas"/>
+                        <TextBlock x:Name="TxtUpPeak" Grid.Row="2" Text="--" FontSize="11" Foreground="#94A3B8" FontFamily="Consolas"/>
+                        <ProgressBar x:Name="ProgUp" Grid.Row="4" Minimum="0" Maximum="100" Value="0" Height="5" Margin="0,10,0,0" Foreground="#3B82F6" Style="{StaticResource DarkProgressBar}"/>
+                    </Grid>
+                </Border>
+
+                <Border Grid.Column="4" Background="#121722" BorderBrush="#1F2937" BorderThickness="1" CornerRadius="10" Padding="13,12">
+                    <StackPanel>
+                        <TextBlock x:Name="LblLat" Text="直连延迟" FontSize="11" FontWeight="SemiBold" Foreground="#64748B"/>
+                        <TextBlock x:Name="TxtLat" Text="-- ms" FontSize="15" FontWeight="SemiBold" Foreground="#E2E8F0" Margin="0,6,0,2" FontFamily="Consolas"/>
+                        <TextBlock x:Name="TxtLatPair" Text="10.13.37.2 &lt;-&gt; .1" FontSize="11" Foreground="#64748B" FontFamily="Consolas"/>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Action Footer (2 buttons only: Start Test + Close) -->
+            <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right">
+                <Button x:Name="BtnStartTest" Style="{StaticResource PrimaryBtn}" Content="开始测速" Click="BtnStartTest_Click" MinWidth="112" Padding="16,7"/>
+                <Button x:Name="BtnClose" Style="{StaticResource GhostBtn}" Content="关闭" Click="BtnClose_Click" Margin="8,0,0,0" MinWidth="82" Padding="14,7"/>
+            </StackPanel>
+        </Grid>
+    </Border>
+</Window>

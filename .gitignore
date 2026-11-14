@@ -1,0 +1,29 @@
+# macOS / OS metadata
+.DS_Store
+Thumbs.db
+
+# Swift / macOS build artifacts
+mac/.build/
+mac/build/
+mac/*.app/
+
+# .NET / WPF build artifacts
+ui/bin/
+ui/obj/
+ui/publish/
+.vs/
+*.user
+*.suo
+
+# C / MinGW binaries and third-party runtime drops
+*.o
+*.obj
+*.a
+*.lib
+*.exe
+*.dll
+*.inf
+*.cat
+drv_cache/
+libwdi/
+wintun/
