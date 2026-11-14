@@ -6,6 +6,11 @@ Thumbs.db
 mac/.build/
 mac/build/
 mac/*.app/
+mac_installer/.build/
+mac_installer/build/
+mac_installer/Payload/
+mac_installer/*.app/
+*.dmg
 
 # .NET / WPF build artifacts
 ui/bin/
