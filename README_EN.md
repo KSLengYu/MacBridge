@@ -51,12 +51,20 @@ MacBridge/
         ├── NetworkMonitor.swift
         ├── Views.swift
         └── Localization.swift
+└── installer/                   # Windows Setup & Uninstaller Wizard (C# / .NET 10 WPF)
+    ├── MacBridgeSetup.csproj
+    ├── MainWindow.xaml / MainWindow.xaml.cs
+    ├── InstallerI18n.cs
+    ├── icon.png / avatar.png
+    └── app.ico / app.manifest
 ```
 
-## Quick Start
+## Quick Start (Installer / Portable)
 
 1. Connect your Mac and Windows PC with a data-capable Type-C / USB-A cable.
-2. Launch `MacBridgeUI.exe` as Administrator on Windows (or run `MacBridge.exe` directly) and click Connect. On first use, `WinUSB` will be bound automatically to `VID_05AC&PID_1902/1905`.
+2. Download from [Releases](https://github.com/KSLengYu/MacBridge/releases) (Windows builds require `.NET 10 Desktop Runtime x64`):
+   - **Windows Installer (Recommended)**: Run `MacBridge-v1.0.0-Windows-x64-Setup.exe` to install to `Program Files`, create Desktop & Start Menu shortcuts, and register cleanly in Windows Apps & Features (includes optional stock driver restore on uninstall).
+   - **Windows Portable**: Extract `MacBridge-v1.0.0-Windows-x64-Portable.zip`, keep all 4 files together, and run `MacBridgeUI.exe` as Administrator.
 3. Once connected (default Windows `10.13.37.2`, Mac `10.13.37.1`):
    - On Mac **Finder**, press `Command + K` and connect to `smb://<Windows-Bridge-IP>` (default `smb://10.13.37.2`) for high-speed file transfers;
    - Or connect via `ssh <WindowsUser>@10.13.37.2`, `scp`, or any local TCP/UDP tool.

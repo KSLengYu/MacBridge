@@ -51,12 +51,20 @@ MacBridge/
         ├── NetworkMonitor.swift
         ├── Views.swift
         └── Localization.swift
+└── installer/                   # Windows 安装/卸载向导 (C# / .NET 10 WPF)
+    ├── MacBridgeSetup.csproj
+    ├── MainWindow.xaml / MainWindow.xaml.cs
+    ├── InstallerI18n.cs
+    ├── icon.png / avatar.png
+    └── app.ico / app.manifest
 ```
 
-## 快速使用
+## 快速使用（安装版 / 便携版）
 
 1. 使用支持数据传输的 Type-C / USB-A 线缆连接 Mac 与 Windows。
-2. 在 Windows 上以管理员权限启动 `MacBridgeUI.exe`（或命令行工具 `MacBridge.exe`），点击一键识别并连接；首次连接将自动为 `VID_05AC&PID_1902/1905` 绑定 `WinUSB`。
+2. 前往 [Releases](https://github.com/KSLengYu/MacBridge/releases) 下载 Windows 端（需 `.NET 10 Desktop Runtime`）与 macOS 端：
+   - **Windows 安装版（推荐）**：下载运行 `MacBridge-v1.0.0-Windows-x64-Setup.exe`，可自定义安装路径、自动创建桌面与开始菜单快捷方式，并支持通过系统“应用和功能”或开始菜单一键卸载（可选还原原厂驱动）。
+   - **Windows 便携版**：下载解压 `MacBridge-v1.0.0-Windows-x64-Portable.zip`，保持 4 个核心文件同目录后直接以管理员权限运行 `MacBridgeUI.exe`。
 3. 隧道建立成功后（默认 Windows `10.13.37.2`，Mac `10.13.37.1`）：
    - 在 Mac **访达**按 `Command + K`，输入 `smb://<Windows直连IP>`（默认 `smb://10.13.37.2`）即可直接高速互传文件；
    - 或直接使用 `ssh <Windows用户名>@10.13.37.2`、`scp`、SMB 等局域网服务。
