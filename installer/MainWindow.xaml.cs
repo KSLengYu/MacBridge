@@ -478,7 +478,7 @@ public partial class MainWindow : Window
         using var key = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
             .CreateSubKey(UninstallRegPath);
         key.SetValue("DisplayName", "MacBridge");
-        key.SetValue("DisplayVersion", "1.0.0");
+        key.SetValue("DisplayVersion", "1.0.1");
         key.SetValue("Publisher", "KSLengYu");
         key.SetValue("URLInfoAbout", RepoUrl);
         key.SetValue("InstallLocation", installDir);

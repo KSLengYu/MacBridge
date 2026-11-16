@@ -27,7 +27,7 @@ final class InstallerL10n: ObservableObject {
 
     private static let zh: [String: String] = [
         "win_title": "MacBridge 安装向导",
-        "badge_ver": "安装器 v1.0.0",
+        "badge_ver": "安装器 v1.0.1",
         "lang_btn": "中文 / EN",
         "hero_title": "MacBridge",
         "hero_sub": "纯用户态 Mac <-> Windows USB 直连高速网桥监控端（支持 Apple Silicon 与 Intel）",
@@ -67,7 +67,7 @@ final class InstallerL10n: ObservableObject {
 
     private static let en: [String: String] = [
         "win_title": "MacBridge Installer",
-        "badge_ver": "Installer v1.0.0",
+        "badge_ver": "Installer v1.0.1",
         "lang_btn": "EN / 中文",
         "hero_title": "MacBridge",
         "hero_sub": "Native USB direct IP bridge monitor for macOS (Apple Silicon & Intel)",

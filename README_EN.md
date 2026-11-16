@@ -67,10 +67,10 @@ MacBridge/
 
 1. Connect your Mac and Windows PC with a data-capable Type-C / USB-A cable.
 2. Download from [Releases](https://github.com/KSLengYu/MacBridge/releases):
-   - **Windows Installer (Recommended)**: Run `MacBridge-v1.0.0-Windows-x64-Setup.exe` (requires `.NET 10 Desktop Runtime x64`) to install to `Program Files`, create Desktop & Start Menu shortcuts, and register in Windows Apps & Features.
-   - **Windows Portable**: Extract `MacBridge-v1.0.0-Windows-x64-Portable.zip`, keep all 4 files together, and run `MacBridgeUI.exe` as Administrator.
-   - **macOS Installer (Recommended)**: Open `MacBridge-v1.0.0-macOS-Installer.dmg` and run `MacBridge Installer.app` — it automatically detects whether your Mac is **Apple Silicon (`arm64`)** or **Intel (`x86_64`)** and installs the matching native build (also includes one-click uninstall).
-   - **macOS Portable**: Extract `MacBridge-v1.0.0-macOS-Universal-Portable.zip` (Universal `arm64 + x86_64` bundle, runs directly on both Apple Silicon and Intel Macs).
+   - **Windows Installer (Recommended)**: Run `MacBridge-v1.0.1-Windows-x64-Setup.exe` (requires `.NET 10 Desktop Runtime x64`) to install to `Program Files`, create Desktop & Start Menu shortcuts, and register in Windows Apps & Features.
+   - **Windows Portable**: Extract `MacBridge-v1.0.1-Windows-x64-Portable.zip`, keep all 4 files together, and run `MacBridgeUI.exe` as Administrator.
+   - **macOS Installer (Recommended)**: Open `MacBridge-v1.0.1-macOS-Installer.dmg` and run `MacBridge Installer.app` — it automatically detects whether your Mac is **Apple Silicon (`arm64`)** or **Intel (`x86_64`)** and installs the matching native build (also includes one-click uninstall).
+   - **macOS Portable**: Extract `MacBridge-v1.0.1-macOS-Universal-Portable.zip` (Universal `arm64 + x86_64` bundle, runs directly on both Apple Silicon and Intel Macs).
 3. Once connected (default Windows `10.13.37.2`, Mac `10.13.37.1`):
    - On Mac **Finder**, press `Command + K` and connect to `smb://<Windows-Bridge-IP>` (default `smb://10.13.37.2`) for high-speed file transfers;
    - Or connect via `ssh <WindowsUser>@10.13.37.2`, `scp`, or any local TCP/UDP tool.

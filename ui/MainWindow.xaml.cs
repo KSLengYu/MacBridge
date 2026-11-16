@@ -659,17 +659,40 @@ public partial class MainWindow : Window
         SetProgress(true, 62, I18n.T("prog_stopping"), ceil: 90);
     }
 
+    private static void StopProcessGracefully(Process p)
+    {
+        try
+        {
+            if (p.HasExited) return;
+            try
+            {
+                if (EventWaitHandle.TryOpenExisting($"Local\\MacBridgeStop_{p.Id}", out var stopEv))
+                {
+                    using (stopEv)
+                    {
+                        stopEv.Set();
+                    }
+                    if (p.WaitForExit(2500)) return;
+                }
+            }
+            catch { }
+
+            if (!p.HasExited)
+            {
+                p.Kill(true);
+                p.WaitForExit(3500);
+            }
+        }
+        catch { }
+    }
+
     private static void KillAnyMacBridge()
     {
         foreach (var p in Process.GetProcessesByName("MacBridge"))
         {
             try
             {
-                if (!p.HasExited)
-                {
-                    p.Kill(true);
-                    p.WaitForExit(3500);
-                }
+                StopProcessGracefully(p);
             }
             catch { }
             finally { p.Dispose(); }
@@ -703,11 +726,7 @@ public partial class MainWindow : Window
             {
                 try
                 {
-                    if (!proc.HasExited)
-                    {
-                        proc.Kill(true);
-                        proc.WaitForExit(3500);
-                    }
+                    StopProcessGracefully(proc);
                 }
                 catch { }
                 finally { proc.Dispose(); }
@@ -1171,7 +1190,7 @@ public partial class MainWindow : Window
         {
             if (_bridgeProc is { HasExited: false })
             {
-                _bridgeProc.Kill(true);
+                StopProcessGracefully(_bridgeProc);
             }
             _bridgeProc?.Dispose();
             _bridgeProc = null;

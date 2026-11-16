@@ -145,6 +145,32 @@ static int mb_kill_process_by_name(const char *exeName) {
     return killed;
 }
 
+static void mb_delete_fw_rules(void) {
+    char sysDir[MAX_PATH] = {0}, netshPath[512] = {0};
+    UINT n = GetSystemDirectoryA(sysDir, sizeof(sysDir));
+    if (n == 0 || n >= sizeof(sysDir)) return;
+    snprintf(netshPath, sizeof(netshPath), "%s\\netsh.exe", sysDir);
+
+    const char *cmds[2] = {
+        "netsh.exe advfirewall firewall delete rule name=\"MacBridge SMB-In\"",
+        "netsh.exe advfirewall firewall delete rule name=\"MacBridge Ping-In\""
+    };
+    for (int i = 0; i < 2; i++) {
+        char cmdLine[256];
+        snprintf(cmdLine, sizeof(cmdLine), "%s", cmds[i]);
+        STARTUPINFOA si;
+        PROCESS_INFORMATION pi;
+        ZeroMemory(&si, sizeof(si));
+        ZeroMemory(&pi, sizeof(pi));
+        si.cb = sizeof(si);
+        if (CreateProcessA(netshPath, cmdLine, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, 5000);
+            CloseHandle(pi.hThread);
+            CloseHandle(pi.hProcess);
+        }
+    }
+}
+
 /** Uninstall libwdi WinUSB INF bound to Apple 05AC:1902/1905 and restore stock usbccgp driver. */
 static int mb_restore_apple_driver(void) {
     printf("[RESTORE] 正在停止后台 MacBridge 进程...\n");
@@ -234,6 +260,8 @@ static int mb_restore_apple_driver(void) {
         }
         SetupDiDestroyDeviceInfoList(hNow);
     }
+
+    mb_delete_fw_rules();
 
     printf("[OK] 原厂驱动恢复完成。\n");
     fflush(stdout);

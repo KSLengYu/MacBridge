@@ -84,6 +84,8 @@ typedef BOOL (WINAPI *PFN_WinUsb_QueryPipe)(WINUSB_INTERFACE_HANDLE, UCHAR, UCHA
 typedef BOOL (WINAPI *PFN_WinUsb_ControlTransfer)(WINUSB_INTERFACE_HANDLE, WINUSB_SETUP_PACKET, PUCHAR, ULONG, PULONG, LPOVERLAPPED);
 typedef BOOL (WINAPI *PFN_WinUsb_ReadPipe)(WINUSB_INTERFACE_HANDLE, UCHAR, PUCHAR, ULONG, PULONG, LPOVERLAPPED);
 typedef BOOL (WINAPI *PFN_WinUsb_WritePipe)(WINUSB_INTERFACE_HANDLE, UCHAR, PUCHAR, ULONG, PULONG, LPOVERLAPPED);
+typedef BOOL (WINAPI *PFN_WinUsb_SetPipePolicy)(WINUSB_INTERFACE_HANDLE, UCHAR, ULONG, ULONG, PVOID);
+typedef BOOL (WINAPI *PFN_WinUsb_AbortPipe)(WINUSB_INTERFACE_HANDLE, UCHAR);
 
 static PFN_WinUsb_Initialize pWinUsb_Initialize;
 static PFN_WinUsb_Free pWinUsb_Free;
@@ -94,6 +96,8 @@ static PFN_WinUsb_QueryPipe pWinUsb_QueryPipe;
 static PFN_WinUsb_ControlTransfer pWinUsb_ControlTransfer;
 static PFN_WinUsb_ReadPipe pWinUsb_ReadPipe;
 static PFN_WinUsb_WritePipe pWinUsb_WritePipe;
+static PFN_WinUsb_SetPipePolicy pWinUsb_SetPipePolicy;
+static PFN_WinUsb_AbortPipe pWinUsb_AbortPipe;
 
 // ---- Dynamic Wintun definitions ----
 typedef void* WINTUN_ADAPTER_HANDLE;
@@ -147,7 +151,7 @@ static const TUNNEL_PREFIX CANDIDATE_PREFIXES[] = {
     {172, 31, 237},
     {192, 168, 237}
 };
-static uint8_t g_peerMac[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+static volatile LONG64 g_peerMacPacked = 0xFFFFFFFFFFFFLL;
 static volatile LONG g_hasPeerMac = 0;
 static volatile LONG64 g_rxFrames = 0, g_txFrames = 0;
 
@@ -401,8 +405,13 @@ static int find_winusb_apple_path(char *outPath, DWORD outCap, const char *overr
                     if (hk != INVALID_HANDLE_VALUE) {
                         char guidBuf[256] = {0};
                         DWORD sz = sizeof(guidBuf) - 1, type = 0;
-                        if (RegQueryValueExA(hk, "DeviceInterfaceGUIDs", NULL, &type, (LPBYTE)guidBuf, &sz) == ERROR_SUCCESS ||
-                            RegQueryValueExA(hk, "DeviceInterfaceGUID", NULL, &type, (LPBYTE)guidBuf, &sz) == ERROR_SUCCESS) {
+                        LONG rReg = RegQueryValueExA(hk, "DeviceInterfaceGUIDs", NULL, &type, (LPBYTE)guidBuf, &sz);
+                        if (rReg != ERROR_SUCCESS) {
+                            ZeroMemory(guidBuf, sizeof(guidBuf));
+                            sz = sizeof(guidBuf) - 1;
+                            rReg = RegQueryValueExA(hk, "DeviceInterfaceGUID", NULL, &type, (LPBYTE)guidBuf, &sz);
+                        }
+                        if (rReg == ERROR_SUCCESS) {
                             if (parse_guid(guidBuf, &targetGuid)) {
                                 printf("[USB] Found WinUSB device (%s), GUID=%s\n", hwid, guidBuf);
                                 haveGuid = 1;
@@ -447,9 +456,26 @@ static int find_winusb_apple_path(char *outPath, DWORD outCap, const char *overr
     return found;
 }
 
+static uint16_t read_u16_le(const void *p) {
+    uint16_t v = 0;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+static uint32_t read_u32_le(const void *p) {
+    uint32_t v = 0;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+
+static int is_pow2_u16(uint16_t v) {
+    return v != 0 && (v & (uint16_t)(v - 1)) == 0;
+}
+
 static uint16_t align_up(uint16_t val, uint16_t align) {
     if (align <= 1) return val;
-    return (uint16_t)(((val + align - 1) / align) * align);
+    uint32_t aligned = (((uint32_t)val + align - 1u) / align) * align;
+    return (aligned > 0xFFFFu) ? 0xFFFFu : (uint16_t)aligned;
 }
 
 static uint16_t align_up_rem(uint16_t val, uint16_t div, uint16_t rem) {
@@ -457,8 +483,9 @@ static uint16_t align_up_rem(uint16_t val, uint16_t div, uint16_t rem) {
     uint16_t r = rem % div;
     uint16_t cur = val % div;
     if (cur == r) return val;
-    uint16_t diff = (cur < r) ? (r - cur) : (div - cur + r);
-    return (uint16_t)(val + diff);
+    uint32_t diff = (cur < r) ? (r - cur) : (div - cur + r);
+    uint32_t next = (uint32_t)val + diff;
+    return (next > 0xFFFFu) ? 0xFFFFu : (uint16_t)next;
 }
 
 static void trigger_shutdown(void) {
@@ -478,22 +505,31 @@ static int is_usb_disconnect_err(DWORD err) {
 /** Pack up to 32 Ethernet frames into one CDC-NCM NTB16 block and send over Bulk OUT. */
 static void send_ncm_eth_batch(const uint8_t * const *frames, const uint16_t *lens, int count) {
     if (count <= 0) return;
-    uint16_t ndpAlign = g_ntb.wNdpOutAlignment ? g_ntb.wNdpOutAlignment : 4;
-    uint16_t div = g_ntb.wNdpOutDivisor ? g_ntb.wNdpOutDivisor : 4;
-    uint16_t rem = g_ntb.wNdpOutPayloadRemainder;
+    if (count > 32) count = 32;
+    if (g_ntb.wNtbOutMaxDatagrams > 0 && count > g_ntb.wNtbOutMaxDatagrams) {
+        count = g_ntb.wNtbOutMaxDatagrams;
+    }
+
+    uint16_t ndpAlign = is_pow2_u16(g_ntb.wNdpOutAlignment) && g_ntb.wNdpOutAlignment >= 4 && g_ntb.wNdpOutAlignment <= 64
+        ? g_ntb.wNdpOutAlignment : 4;
+    uint16_t div = is_pow2_u16(g_ntb.wNdpOutDivisor) && g_ntb.wNdpOutDivisor >= 4 && g_ntb.wNdpOutDivisor <= 64
+        ? g_ntb.wNdpOutDivisor : 4;
+    uint16_t rem = (uint16_t)(g_ntb.wNdpOutPayloadRemainder % div);
     uint32_t maxOut = (g_ntb.dwNtbOutMaxSize >= 2048 && g_ntb.dwNtbOutMaxSize <= 32764) ? g_ntb.dwNtbOutMaxSize : 16384;
 
     uint16_t ndpOff = align_up(sizeof(NCM_NTH16), ndpAlign);
     uint16_t ndpLen = (uint16_t)(8 + (count + 1) * 4);
-    uint16_t cursor = (uint16_t)(ndpOff + ndpLen);
-
     static uint8_t buf[32768];
+    if ((uint32_t)ndpOff + ndpLen >= maxOut || (uint32_t)ndpOff + ndpLen > sizeof(buf)) {
+        return;
+    }
+
+    uint16_t cursor = (uint16_t)(ndpOff + ndpLen);
     uint16_t dOffs[32];
-    if (count > 32) count = 32;
 
     for (int i = 0; i < count; i++) {
         uint16_t dgramOff = align_up_rem(cursor, div, rem);
-        if ((uint32_t)dgramOff + lens[i] > maxOut) {
+        if (dgramOff < cursor || (uint32_t)dgramOff + lens[i] > maxOut || (uint32_t)dgramOff + lens[i] > sizeof(buf)) {
             count = i;
             break;
         }
@@ -503,10 +539,12 @@ static void send_ncm_eth_batch(const uint8_t * const *frames, const uint16_t *le
     if (count == 0) return;
 
     uint16_t totalLen = cursor;
-    if ((totalLen % 512) == 0 && (uint32_t)totalLen + 4 <= maxOut) totalLen += 4;
+    if ((totalLen % 512) == 0 && (uint32_t)totalLen + 4 <= maxOut && (uint32_t)totalLen + 4 <= sizeof(buf)) {
+        totalLen += 4;
+    }
 
     EnterCriticalSection(&g_txLock);
-    memset(buf, 0, ndpOff + ndpLen);
+    memset(buf, 0, (size_t)ndpOff + ndpLen);
 
     NCM_NTH16 *nth = (NCM_NTH16*)buf;
     nth->dwSignature = 0x484D434E; // NCMH
@@ -515,20 +553,22 @@ static void send_ncm_eth_batch(const uint8_t * const *frames, const uint16_t *le
     nth->wBlockLength = totalLen;
     nth->wNdpIndex = ndpOff;
 
-    *(uint32_t*)(buf + ndpOff) = 0x304D434E; // NCM0
-    *(uint16_t*)(buf + ndpOff + 4) = ndpLen;
-    *(uint16_t*)(buf + ndpOff + 6) = 0;
+    uint32_t sig = 0x304D434E; // NCM0
+    memcpy(buf + ndpOff, &sig, 4);
+    memcpy(buf + ndpOff + 4, &ndpLen, 2);
+    uint16_t nextNdp = 0;
+    memcpy(buf + ndpOff + 6, &nextNdp, 2);
 
     uint16_t prevEnd = (uint16_t)(ndpOff + ndpLen);
     for (int i = 0; i < count; i++) {
         if (dOffs[i] > prevEnd) memset(buf + prevEnd, 0, dOffs[i] - prevEnd);
         memcpy(buf + dOffs[i], frames[i], lens[i]);
-        *(uint16_t*)(buf + ndpOff + 8 + i * 4) = dOffs[i];
-        *(uint16_t*)(buf + ndpOff + 8 + i * 4 + 2) = lens[i];
+        memcpy(buf + ndpOff + 8 + i * 4, &dOffs[i], 2);
+        memcpy(buf + ndpOff + 8 + i * 4 + 2, &lens[i], 2);
         prevEnd = (uint16_t)(dOffs[i] + lens[i]);
     }
-    *(uint16_t*)(buf + ndpOff + 8 + count * 4) = 0;
-    *(uint16_t*)(buf + ndpOff + 8 + count * 4 + 2) = 0;
+    uint32_t zeroEntry = 0;
+    memcpy(buf + ndpOff + 8 + count * 4, &zeroEntry, 4);
     if (totalLen > prevEnd) memset(buf + prevEnd, 0, totalLen - prevEnd);
 
     ULONG written = 0;
@@ -655,20 +695,21 @@ static int try_handle_dhcp_v4(const uint8_t *eth, uint16_t len) {
 static void handle_eth_frame(const uint8_t *eth, uint16_t len) {
     if (len < 14) return;
     if ((eth[6] & 1) == 0) {
-        if (!g_hasPeerMac) {
-            memcpy(g_peerMac, eth + 6, 6);
-            InterlockedExchange(&g_hasPeerMac, 1);
+        uint64_t packed = 0;
+        memcpy(&packed, eth + 6, 6);
+        InterlockedExchange64(&g_peerMacPacked, (LONG64)packed);
+        if (!InterlockedCompareExchange(&g_hasPeerMac, 1, 0)) {
             printf("[MAC] Learned peer MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                   g_peerMac[0], g_peerMac[1], g_peerMac[2], g_peerMac[3], g_peerMac[4], g_peerMac[5]);
-        } else {
-            memcpy(g_peerMac, eth + 6, 6);
+                   eth[6], eth[7], eth[8], eth[9], eth[10], eth[11]);
         }
     }
 
     uint16_t etype = (uint16_t)((eth[12] << 8) | eth[13]);
     if (etype == 0x0806 && len >= 42) {
-        uint16_t oper = (uint16_t)((eth[20] << 8) | eth[21]);
-        if (oper == 1) {
+        uint16_t htype = (uint16_t)((eth[14] << 8) | eth[15]);
+        uint16_t ptype = (uint16_t)((eth[16] << 8) | eth[17]);
+        uint16_t oper  = (uint16_t)((eth[20] << 8) | eth[21]);
+        if (htype == 1 && ptype == 0x0800 && eth[18] == 6 && eth[19] == 4 && oper == 1) {
             const uint8_t *spa = eth + 28;
             const uint8_t *tpa = eth + 38;
             if (memcmp(tpa, WIN_IP, 4) == 0) {
@@ -729,22 +770,41 @@ static DWORD WINAPI usb_rx_thread(LPVOID param) {
         }
         consecutiveErrs = 0;
         if (nread < sizeof(NCM_NTH16)) continue;
-        NCM_NTH16 *nth = (NCM_NTH16*)buf;
-        if (nth->dwSignature != 0x484D434E) continue;
-        uint16_t ndpOff = nth->wNdpIndex;
-        while (ndpOff >= sizeof(NCM_NTH16) && (uint32_t)ndpOff + 8 <= nread) {
-            uint32_t ndpSig = *(uint32_t*)(buf + ndpOff);
-            if (ndpSig != 0x304D434E && ndpSig != 0x314D434E) break;
-            uint16_t ndpLen = *(uint16_t*)(buf + ndpOff + 4);
-            uint16_t nextNdp = *(uint16_t*)(buf + ndpOff + 6);
-            if (ndpLen < 12 || (uint32_t)ndpOff + ndpLen > nread) break;
-            int step = (ndpSig == 0x304D434E) ? 4 : 8;
-            for (int off = ndpOff + 8; off + 4 <= ndpOff + ndpLen; off += step) {
-                uint16_t dIdx = *(uint16_t*)(buf + off);
-                uint16_t dLen = *(uint16_t*)(buf + off + 2);
+        if (read_u32_le(buf) != 0x484D434E) continue; // NCMH
+        uint16_t hdrLen = read_u16_le(buf + 4);
+        uint16_t blockLen = read_u16_le(buf + 8);
+        uint16_t ndpOff = read_u16_le(buf + 10);
+        if (hdrLen != sizeof(NCM_NTH16)) continue;
+        if (blockLen < sizeof(NCM_NTH16) || (uint32_t)blockLen > nread) continue;
+
+        uint16_t seenNdps[8] = {0};
+        for (int ndpIdx = 0; ndpIdx < 8 && ndpOff >= sizeof(NCM_NTH16) && (uint32_t)ndpOff + 8 <= blockLen; ndpIdx++) {
+            int seen = 0;
+            for (int k = 0; k < ndpIdx; k++) {
+                if (seenNdps[k] == ndpOff) { seen = 1; break; }
+            }
+            if (seen) break;
+            seenNdps[ndpIdx] = ndpOff;
+
+            uint32_t ndpSig = read_u32_le(buf + ndpOff);
+            if (ndpSig != 0x304D434E && ndpSig != 0x314D434E) break; // NCM0 / NCM1 (both NDP16)
+            uint16_t ndpLen = read_u16_le(buf + ndpOff + 4);
+            uint16_t nextNdp = read_u16_le(buf + ndpOff + 6);
+            if (ndpLen < 12 || (uint32_t)ndpOff + ndpLen > blockLen) break;
+
+            int hasCrc = (ndpSig == 0x314D434E);
+            for (uint32_t off = (uint32_t)ndpOff + 8; off + 4 <= (uint32_t)ndpOff + ndpLen; off += 4) {
+                uint16_t dIdx = read_u16_le(buf + off);
+                uint16_t dLen = read_u16_le(buf + off + 2);
                 if (dIdx == 0 && dLen == 0) break;
-                if ((uint32_t)dIdx + dLen <= nread && dLen >= 14) {
-                    handle_eth_frame(buf + dIdx, dLen);
+                if ((uint32_t)dIdx + dLen <= blockLen) {
+                    if (hasCrc) {
+                        if (dLen < 18) continue;
+                        dLen -= 4;
+                    }
+                    if (dLen >= 14) {
+                        handle_eth_frame(buf + dIdx, dLen);
+                    }
                 }
             }
             ndpOff = nextNdp;
@@ -772,19 +832,25 @@ static DWORD WINAPI tun_rx_thread(LPVOID param) {
             DWORD sz = 0;
             BYTE *pkt = pWintunReceivePacket(g_session, &sz);
             if (!pkt) {
-                if (GetLastError() == ERROR_NO_MORE_ITEMS) {
+                DWORD err = GetLastError();
+                if (err == ERROR_NO_MORE_ITEMS) {
                     if (count == 0) WaitForSingleObject(ev, 200);
                     break;
                 }
+                printf("[TUN] WintunReceivePacket failed: %lu\n", err);
+                trigger_shutdown();
                 free(pool);
-                return 0;
+                return 1;
             }
             if (sz >= 20 && (int)(sz + 14) <= SLOT_SZ) {
                 uint8_t ver = pkt[0] >> 4;
                 uint16_t etype = (ver == 4) ? 0x0800 : (ver == 6 ? 0x86DD : 0);
                 if (etype) {
+                    uint8_t peerMac[6];
+                    uint64_t packedMac = (uint64_t)InterlockedExchangeAdd64(&g_peerMacPacked, 0);
+                    memcpy(peerMac, &packedMac, 6);
                     uint8_t *dst = pool + (size_t)count * SLOT_SZ;
-                    memcpy(dst + 0, g_peerMac, 6);
+                    memcpy(dst + 0, peerMac, 6);
                     memcpy(dst + 6, WIN_MAC, 6);
                     dst[12] = (uint8_t)(etype >> 8);
                     dst[13] = (uint8_t)(etype & 0xFF);
@@ -818,16 +884,127 @@ static BOOL WINAPI ctrl_handler(DWORD type) {
     if (!(dst)) { printf("[ERR] Missing DLL proc: %s\n", (sym)); rc = 10; goto cleanup; } \
 } while (0)
 
+static void harden_dll_search_order(void) {
+    typedef BOOL (WINAPI *PFN_SetDefaultDllDirectories)(DWORD);
+    HMODULE hK32 = GetModuleHandleA("kernel32.dll");
+    if (hK32) {
+        PFN_SetDefaultDllDirectories pSetDef =
+            (PFN_SetDefaultDllDirectories)(void*)GetProcAddress(hK32, "SetDefaultDllDirectories");
+        if (pSetDef) {
+            /* LOAD_LIBRARY_SEARCH_APPLICATION_DIR (0x200) | LOAD_LIBRARY_SEARCH_SYSTEM32 (0x800) */
+            pSetDef(0x00000200u | 0x00000800u);
+        }
+    }
+}
+
+static HMODULE load_sys32_dll(const char *dllName) {
+    char sysDir[MAX_PATH] = {0}, fullPath[512] = {0};
+    UINT n = GetSystemDirectoryA(sysDir, sizeof(sysDir));
+    if (n == 0 || n >= sizeof(sysDir)) return NULL;
+    snprintf(fullPath, sizeof(fullPath), "%s\\%s", sysDir, dllName);
+    return LoadLibraryExA(fullPath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+}
+
 static HMODULE load_wintun_dll(void) {
     char exeDir[MAX_PATH] = {0}, dllPath[512] = {0};
     get_exe_dir(exeDir, sizeof(exeDir));
     snprintf(dllPath, sizeof(dllPath), "%s\\wintun.dll", exeDir);
-    HMODULE h = LoadLibraryA(dllPath);
-    if (!h) h = LoadLibraryA("C:\\MacBridge\\wintun.dll");
-    return h;
+    return LoadLibraryExA(dllPath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+}
+
+static int run_sys32_tool(const char *exeName, const char *args, char *outBuf, DWORD outCap) {
+    char sysDir[MAX_PATH] = {0}, exePath[512] = {0}, cmdLine[2048] = {0};
+    UINT n = GetSystemDirectoryA(sysDir, sizeof(sysDir));
+    if (n == 0 || n >= sizeof(sysDir)) return -1;
+    snprintf(exePath, sizeof(exePath), "%s\\%s", sysDir, exeName);
+    snprintf(cmdLine, sizeof(cmdLine), "\"%s\" %s", exePath, args ? args : "");
+
+    HANDLE hRead = NULL, hWrite = NULL;
+    STARTUPINFOA si;
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&si, sizeof(si));
+    ZeroMemory(&pi, sizeof(pi));
+    si.cb = sizeof(si);
+
+    if (outBuf && outCap > 1) {
+        outBuf[0] = '\0';
+        SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, TRUE };
+        if (CreatePipe(&hRead, &hWrite, &sa, 0)) {
+            SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+            si.dwFlags = STARTF_USESTDHANDLES;
+            si.hStdOutput = hWrite;
+            si.hStdError = hWrite;
+            si.hStdInput = INVALID_HANDLE_VALUE;
+        }
+    }
+
+    BOOL ok = CreateProcessA(exePath, cmdLine, NULL, NULL, (hWrite != NULL), CREATE_NO_WINDOW, NULL, NULL, &si, &pi);
+    if (hWrite) CloseHandle(hWrite);
+    if (!ok) {
+        if (hRead) CloseHandle(hRead);
+        return -1;
+    }
+
+    if (hRead) {
+        DWORD total = 0, rd = 0;
+        while (total + 1 < outCap && ReadFile(hRead, outBuf + total, outCap - 1 - total, &rd, NULL) && rd > 0) {
+            total += rd;
+        }
+        outBuf[total] = '\0';
+        CloseHandle(hRead);
+    }
+
+    WaitForSingleObject(pi.hProcess, 12000);
+    DWORD exitCode = 1;
+    GetExitCodeProcess(pi.hProcess, &exitCode);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)exitCode;
+}
+
+static DWORD WINAPI fw_setup_thread(LPVOID param) {
+    (void)param;
+    run_sys32_tool("netsh.exe",
+        "advfirewall firewall show rule name=\"MacBridge SMB-In\" >nul 2>&1", NULL, 0);
+    /* Ensure interface-scoped SMB (445) & ICMPv4 Ping allow rules exist so Public profile cannot block transfers */
+    const char *ensureRules =
+        "-NoProfile -NonInteractive -Command \""
+        "if (-not (Get-NetFirewallRule -DisplayName 'MacBridge SMB-In' -ErrorAction SilentlyContinue)) { "
+        "New-NetFirewallRule -DisplayName 'MacBridge SMB-In' -Direction Inbound -InterfaceAlias 'MacBridge' -Protocol TCP -LocalPort 445 -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null }; "
+        "if (-not (Get-NetFirewallRule -DisplayName 'MacBridge Ping-In' -ErrorAction SilentlyContinue)) { "
+        "New-NetFirewallRule -DisplayName 'MacBridge Ping-In' -Direction Inbound -InterfaceAlias 'MacBridge' -Protocol ICMPv4 -IcmpType 8 -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null }\"";
+    run_sys32_tool("WindowsPowerShell\\v1.0\\powershell.exe", ensureRules, NULL, 0);
+
+    int confirmedPrivate = 0;
+    for (int i = 0; i < 15 && g_running; i++) {
+        char out[256] = {0};
+        const char *psProf =
+            "-NoProfile -NonInteractive -Command \""
+            "$p = Get-NetConnectionProfile -InterfaceAlias 'MacBridge' -ErrorAction SilentlyContinue; "
+            "if ($p) { "
+            "if ($p.NetworkCategory -ne 'Private') { Set-NetConnectionProfile -InterfaceAlias 'MacBridge' -NetworkCategory Private -ErrorAction SilentlyContinue }; "
+            "$p2 = Get-NetConnectionProfile -InterfaceAlias 'MacBridge' -ErrorAction SilentlyContinue; "
+            "if ($p2) { Write-Output $p2.NetworkCategory } }\"";
+        run_sys32_tool("WindowsPowerShell\\v1.0\\powershell.exe", psProf, out, sizeof(out));
+        if (strstr(out, "Private") != NULL) {
+            confirmedPrivate = 1;
+            break;
+        }
+        if (g_stopEvent) {
+            if (WaitForSingleObject(g_stopEvent, 1000) == WAIT_OBJECT_0) break;
+        } else {
+            Sleep(1000);
+        }
+    }
+
+    if (g_running) {
+        printf("[FW] Profile=%s\n", confirmedPrivate ? "Private" : "Public (Scoped rules active)");
+    }
+    return 0;
 }
 
 int main(int argc, char **argv) {
+    harden_dll_search_order();
     SetConsoleOutputCP(65001);
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
@@ -844,6 +1021,11 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--no-wait") == 0) waitCable = 0;
         else if (strcmp(argv[i], "--install-only") == 0) installOnly = 1;
         else if (strcmp(argv[i], "--restore") == 0) doRestore = 1;
+    }
+
+    if (pairIdx < 0 || pairIdx > 3) {
+        printf("[ERR] Invalid --pair %d (must be 0..3)\n", pairIdx);
+        return 1;
     }
 
     int elev = mb_ensure_admin(argc, argv);
@@ -864,10 +1046,12 @@ int main(int argc, char **argv) {
     WINUSB_INTERFACE_HANDLE hIfs[8] = {0};
     int totalIfs = 0;
     WINTUN_ADAPTER_HANDLE adap = NULL;
-    HANDLE tRx = NULL, tTx = NULL;
+    HANDLE tRx = NULL, tTx = NULL, tFw = NULL;
     BOOL txLockInit = FALSE;
 
-    g_stopEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    char stopEvName[64];
+    snprintf(stopEvName, sizeof(stopEvName), "Local\\MacBridgeStop_%lu", GetCurrentProcessId());
+    g_stopEvent = CreateEventA(NULL, TRUE, FALSE, stopEvName);
     SetConsoleCtrlHandler(ctrl_handler, TRUE);
 
     if (!guidArg) {
@@ -882,7 +1066,7 @@ int main(int argc, char **argv) {
         goto cleanup;
     }
 
-    hWinUsbDll = LoadLibraryA("winusb.dll");
+    hWinUsbDll = load_sys32_dll("winusb.dll");
     hWintunDll = load_wintun_dll();
     if (!hWinUsbDll || !hWintunDll) {
         printf("[ERR] Failed to load DLLs: winusb=%p wintun=%p err=%lu\n", (void*)hWinUsbDll, (void*)hWintunDll, GetLastError());
@@ -899,6 +1083,8 @@ int main(int argc, char **argv) {
     LOAD_PROC(pWinUsb_ControlTransfer, hWinUsbDll, "WinUsb_ControlTransfer", PFN_WinUsb_ControlTransfer);
     LOAD_PROC(pWinUsb_ReadPipe, hWinUsbDll, "WinUsb_ReadPipe", PFN_WinUsb_ReadPipe);
     LOAD_PROC(pWinUsb_WritePipe, hWinUsbDll, "WinUsb_WritePipe", PFN_WinUsb_WritePipe);
+    pWinUsb_SetPipePolicy = (PFN_WinUsb_SetPipePolicy)(void*)GetProcAddress(hWinUsbDll, "WinUsb_SetPipePolicy");
+    pWinUsb_AbortPipe     = (PFN_WinUsb_AbortPipe)(void*)GetProcAddress(hWinUsbDll, "WinUsb_AbortPipe");
 
     LOAD_PROC(pWintunCreateAdapter, hWintunDll, "WintunCreateAdapter", PFN_WintunCreateAdapter);
     LOAD_PROC(pWintunCloseAdapter, hWintunDll, "WintunCloseAdapter", PFN_WintunCloseAdapter);
@@ -971,11 +1157,21 @@ int main(int argc, char **argv) {
 
     WINUSB_SETUP_PACKET sp = {0xA1, 0x80, 0, (USHORT)ctrlIdx, sizeof(g_ntb)};
     ULONG xfer = 0;
-    if (pWinUsb_ControlTransfer(hCtrl, sp, (PUCHAR)&g_ntb, sizeof(g_ntb), &xfer, NULL)) {
+    ZeroMemory(&g_ntb, sizeof(g_ntb));
+    if (pWinUsb_ControlTransfer(hCtrl, sp, (PUCHAR)&g_ntb, sizeof(g_ntb), &xfer, NULL) &&
+        xfer == sizeof(g_ntb) && g_ntb.wLength == 0x1C) {
+        if (!is_pow2_u16(g_ntb.wNdpOutAlignment) || g_ntb.wNdpOutAlignment < 4 || g_ntb.wNdpOutAlignment > 64) {
+            g_ntb.wNdpOutAlignment = 4;
+        }
+        if (!is_pow2_u16(g_ntb.wNdpOutDivisor) || g_ntb.wNdpOutDivisor < 4 || g_ntb.wNdpOutDivisor > 64) {
+            g_ntb.wNdpOutDivisor = 4;
+        }
+        g_ntb.wNdpOutPayloadRemainder %= g_ntb.wNdpOutDivisor;
         printf("[NCM] NTB params: inMax=%u outMax=%u outAlign=%u outDiv=%u maxDgram=%u\n",
                g_ntb.dwNtbInMaxSize, g_ntb.dwNtbOutMaxSize, g_ntb.wNdpOutAlignment,
                g_ntb.wNdpOutDivisor, g_ntb.wNtbOutMaxDatagrams);
     } else {
+        ZeroMemory(&g_ntb, sizeof(g_ntb));
         g_ntb.dwNtbInMaxSize = 16384;
         g_ntb.dwNtbOutMaxSize = 16384;
         g_ntb.wNdpOutAlignment = 4;
@@ -1011,6 +1207,10 @@ int main(int argc, char **argv) {
             }
         }
     }
+    if (pWinUsb_SetPipePolicy) {
+        ULONG txTimeoutMs = 1000; /* 0x03 = PIPE_TRANSFER_TIMEOUT */
+        pWinUsb_SetPipePolicy(g_dataIf, g_epOut, 0x03, sizeof(txTimeoutMs), &txTimeoutMs);
+    }
 
     GUID adapGuid = {0x6b3a1201, 0x9c4e, 0x4b12, {0x9a, 0x11, 0x05, 0xac, 0x19, 0x02, 0x00, 0x01}};
     adap = pWintunCreateAdapter(L"MacBridge", L"MacBridge", &adapGuid);
@@ -1028,12 +1228,12 @@ int main(int argc, char **argv) {
 
     select_tunnel_subnet(pairIdx);
 
-    char netshCmd[256];
-    snprintf(netshCmd, sizeof(netshCmd),
-             "netsh interface ip set address name=\"MacBridge\" static %u.%u.%u.%u 255.255.255.0 >nul 2>&1",
+    char netshArgs[256];
+    snprintf(netshArgs, sizeof(netshArgs),
+             "interface ip set address name=\"MacBridge\" static %u.%u.%u.%u 255.255.255.0",
              WIN_IP[0], WIN_IP[1], WIN_IP[2], WIN_IP[3]);
-    system(netshCmd);
-    system("powershell -NoProfile -Command \"Set-NetConnectionProfile -InterfaceAlias 'MacBridge' -NetworkCategory Private -ErrorAction SilentlyContinue\" >nul 2>&1");
+    run_sys32_tool("netsh.exe", netshArgs, NULL, 0);
+    run_sys32_tool("netsh.exe", "interface ipv4 set subinterface \"MacBridge\" mtu=1500 store=active", NULL, 0);
 
     if (!g_running || !is_apple_usb_present()) {
         printf("[USB] Cable disconnected during tunnel setup, stopping...\n");
@@ -1042,7 +1242,7 @@ int main(int argc, char **argv) {
     }
 
     printf("------------------------------------------------------------\n");
-    printf("[READY] Windows IP : %u.%u.%u.%u / 24 (Private profile)\n", WIN_IP[0], WIN_IP[1], WIN_IP[2], WIN_IP[3]);
+    printf("[READY] Windows IP : %u.%u.%u.%u / 24\n", WIN_IP[0], WIN_IP[1], WIN_IP[2], WIN_IP[3]);
     printf("[READY] Mac IP     : %u.%u.%u.%u / 24 (Auto via DHCP)\n", MAC_IP[0], MAC_IP[1], MAC_IP[2], MAC_IP[3]);
     printf("[TIP]   Mac Finder Cmd+K -> smb://%u.%u.%u.%u\n", WIN_IP[0], WIN_IP[1], WIN_IP[2], WIN_IP[3]);
     printf("[TIP]   Press Ctrl+C to stop (run MacBridge-Restore.exe to revert driver)\n");
@@ -1055,6 +1255,12 @@ int main(int argc, char **argv) {
     txLockInit = TRUE;
     tRx = CreateThread(NULL, 0, usb_rx_thread, NULL, 0, NULL);
     tTx = CreateThread(NULL, 0, tun_rx_thread, NULL, 0, NULL);
+    if (!tRx || !tTx) {
+        printf("[ERR] Failed to start worker threads (%lu)\n", GetLastError());
+        rc = 9;
+        goto cleanup;
+    }
+    tFw = CreateThread(NULL, 0, fw_setup_thread, NULL, 0, NULL);
 
     while (g_running) {
         if (g_stopEvent) WaitForSingleObject(g_stopEvent, 2000);
@@ -1068,13 +1274,37 @@ int main(int argc, char **argv) {
 
 cleanup:
     InterlockedExchange(&g_running, 0);
+    if (g_stopEvent) SetEvent(g_stopEvent);
+    if (g_dataIf && pWinUsb_AbortPipe) {
+        pWinUsb_AbortPipe(g_dataIf, g_epIn);
+        pWinUsb_AbortPipe(g_dataIf, g_epOut);
+    }
     if (hFile != INVALID_HANDLE_VALUE) CancelIoEx(hFile, NULL);
     if (g_session && pWintunGetReadWaitEvent) {
         HANDLE tunEv = pWintunGetReadWaitEvent(g_session);
         if (tunEv) SetEvent(tunEv);
     }
-    if (tRx) { WaitForSingleObject(tRx, 3000); CloseHandle(tRx); }
-    if (tTx) { WaitForSingleObject(tTx, 3000); CloseHandle(tTx); }
+
+    BOOL rxExited = TRUE, txExited = TRUE;
+    if (tRx) {
+        rxExited = (WaitForSingleObject(tRx, 5000) == WAIT_OBJECT_0);
+        CloseHandle(tRx);
+    }
+    if (tTx) {
+        txExited = (WaitForSingleObject(tTx, 5000) == WAIT_OBJECT_0);
+        CloseHandle(tTx);
+    }
+    if (tFw) {
+        WaitForSingleObject(tFw, 3000);
+        CloseHandle(tFw);
+    }
+
+    /* Only free shared WinUSB / Wintun / lock objects if worker threads actually terminated cleanly (prevents UAF). */
+    if (!rxExited || !txExited) {
+        printf("[WARN] Worker thread teardown timed out; exiting process directly for safe OS reclaim.\n");
+        ExitProcess((UINT)rc);
+    }
+
     if (g_session && pWintunEndSession) { pWintunEndSession(g_session); g_session = NULL; }
     if (adap && pWintunCloseAdapter) { pWintunCloseAdapter(adap); adap = NULL; }
     if (txLockInit) DeleteCriticalSection(&g_txLock);

@@ -67,10 +67,10 @@ MacBridge/
 
 1. 使用支持数据传输的 Type-C / USB-A 线缆连接 Mac 与 Windows。
 2. 前往 [Releases](https://github.com/KSLengYu/MacBridge/releases) 下载对应版本：
-   - **Windows 安装版（推荐）**：下载运行 `MacBridge-v1.0.0-Windows-x64-Setup.exe`（需 `.NET 10 Desktop Runtime`），可自定义安装路径、创建快捷方式、注册“应用和功能”卸载入口。
-   - **Windows 便携版**：下载解压 `MacBridge-v1.0.0-Windows-x64-Portable.zip`，保持 4 个核心文件同目录后直接以管理员权限运行 `MacBridgeUI.exe`。
-   - **macOS 安装版（推荐）**：下载打开 `MacBridge-v1.0.0-macOS-Installer.dmg`，运行 `MacBridge Installer.app`，会自动识别本机芯片架构（Apple Silicon `arm64` 或 Intel `x86_64`）并安装对应原生版本（也支持一键卸载）。
-   - **macOS 便携版**：下载解压 `MacBridge-v1.0.0-macOS-Universal-Portable.zip`（`arm64 + x86_64` 通用二进制，Apple Silicon 与 Intel 机型均可直接运行）。
+   - **Windows 安装版（推荐）**：下载运行 `MacBridge-v1.0.1-Windows-x64-Setup.exe`（需 `.NET 10 Desktop Runtime`），可自定义安装路径、创建快捷方式、注册“应用和功能”卸载入口。
+   - **Windows 便携版**：下载解压 `MacBridge-v1.0.1-Windows-x64-Portable.zip`，保持 4 个核心文件同目录后直接以管理员权限运行 `MacBridgeUI.exe`。
+   - **macOS 安装版（推荐）**：下载打开 `MacBridge-v1.0.1-macOS-Installer.dmg`，运行 `MacBridge Installer.app`，会自动识别本机芯片架构（Apple Silicon `arm64` 或 Intel `x86_64`）并安装对应原生版本（也支持一键卸载）。
+   - **macOS 便携版**：下载解压 `MacBridge-v1.0.1-macOS-Universal-Portable.zip`（`arm64 + x86_64` 通用二进制，Apple Silicon 与 Intel 机型均可直接运行）。
 3. 隧道建立成功后（默认 Windows `10.13.37.2`，Mac `10.13.37.1`）：
    - 在 Mac **访达**按 `Command + K`，输入 `smb://<Windows直连IP>`（默认 `smb://10.13.37.2`）即可直接高速互传文件；
    - 或直接使用 `ssh <Windows用户名>@10.13.37.2`、`scp`、SMB 等局域网服务。

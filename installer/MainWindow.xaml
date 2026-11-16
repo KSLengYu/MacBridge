@@ -41,7 +41,7 @@
                     <Image Source="pack://application:,,,/icon.png" Width="20" Height="20" Margin="0,0,9,0" RenderOptions.BitmapScalingMode="HighQuality"/>
                     <TextBlock x:Name="TxtWinTitle" Text="MacBridge 安装向导" FontSize="13.5" FontWeight="SemiBold" Foreground="#F8FAFC" VerticalAlignment="Center"/>
                     <Border Background="#152238" BorderBrush="#253A5E" BorderThickness="1" CornerRadius="4" Padding="6,1.5" Margin="10,0,0,0" VerticalAlignment="Center">
-                        <TextBlock x:Name="TxtTopBadge" Text="安装向导 v1.0.0" FontSize="10.5" Foreground="#93C5FD"/>
+                        <TextBlock x:Name="TxtTopBadge" Text="安装向导 v1.0.1" FontSize="10.5" Foreground="#93C5FD"/>
                     </Border>
                 </StackPanel>
 
